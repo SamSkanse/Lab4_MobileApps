@@ -12,15 +12,14 @@ class ViewController: UIViewController {
     @IBOutlet weak var cameraContainerView: UIView!
     @IBOutlet weak var cpuChoiceImageView: UIImageView!
     @IBOutlet weak var userChoiceImageView: UIImageView!
-    @IBOutlet weak var switchCameraButton: UIButton!
     @IBOutlet weak var playButton: UIButton!
     
     // MARK: - Properties
     var captureSession = AVCaptureSession()
     var previewLayer: AVCaptureVideoPreviewLayer!
-    var overlayLayer = CAShapeLayer()
+    var overlayLayer = CALayer()
     var keyPointsLayer = CAShapeLayer()
-    
+
     var currentWinStreak = 0
     var highScoreWinStreak: Int {
         get {
@@ -31,18 +30,12 @@ class ViewController: UIViewController {
         }
     }
     
-    var isGameActive = false
     var cpuChoice: String?
-    var lastDetectedGesture: String? // Store the last valid gesture
+    var lastDetectedGesture: String?
 
-    // Frame Throttling
     var frameCounter = 0
     let frameProcessingInterval = 5
 
-    // Camera Position
-    var currentCameraPosition: AVCaptureDevice.Position = .front
-
-    // Serial Queue for Capture Session Configuration
     let sessionQueue = DispatchQueue(label: "session queue")
     
     override func viewDidLoad() {
@@ -51,13 +44,12 @@ class ViewController: UIViewController {
         setupKeyPointsOverlay()
         updateStreakLabels()
         
+        cpuChoiceImageView.image = UIImage(named: "question_mark")
+        
         sessionQueue.async {
             self.setupCamera()
-            // Start the capture session
             self.captureSession.startRunning()
         }
-        
-        switchCameraButton.layer.zPosition = 1
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -86,57 +78,35 @@ class ViewController: UIViewController {
     
     // MARK: - IBActions
     @IBAction func playButtonTapped(_ sender: UIButton) {
-        if !isGameActive {
-            startGame()
+        guard let userGesture = self.lastDetectedGesture else {
+            let alert = UIAlertController(title: "No Gesture Detected",
+                                          message: "Please perform a gesture before pressing Play Game.",
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            DispatchQueue.main.async {
+                self.present(alert, animated: true)
+            }
+            return
         }
-    }
-    
-    @IBAction func switchCameraTapped(_ sender: UIButton) {
-        switchCamera()
-    }
-    
-    // MARK: - Game Control Methods
-    func startGame() {
-        isGameActive = true
-        gestureLabel.text = "Get Ready..."
-        gestureLabel.textColor = .label
-        cpuGestureLabel.text = "CPU Gesture: Hidden"
+        
+        let cpuGesture = randomCPUGesture()
+        self.cpuChoice = cpuGesture
+        
+        setCPUChoiceImage(to: cpuGesture)
+        cpuGestureLabel.text = "CPU Gesture: \(cpuGesture)"
         cpuGestureLabel.textColor = .label
-        cpuChoiceImageView.image = UIImage(named: "question_mark") // Placeholder image
-        userChoiceImageView.image = nil
 
-        cpuChoice = randomCPUGesture()
-    }
-    
-    func endGame() {
-        isGameActive = false
-        gestureLabel.text = "Gesture: None"
-        gestureLabel.textColor = .secondaryLabel
-        // Do not reset CPU gesture label and image here
-        userChoiceImageView.image = nil
-        cpuChoice = nil
-        lastDetectedGesture = nil // Reset the last detected gesture
+        handleGameLogic(userGesture: userGesture)
     }
     
     // MARK: - Game Logic
     func handleGameLogic(userGesture: String) {
-        guard isGameActive, let cpuGesture = cpuChoice else { return }
-
-        isGameActive = false
-
-        // Update CPU gesture label and image
-        cpuGestureLabel.text = "CPU Gesture: \(cpuGesture)"
-        cpuGestureLabel.textColor = .label
-        setCPUChoiceImage(to: cpuGesture)
-
-        // Update user choice image
-        setUserChoiceImage(to: userGesture)
-
+        guard let cpuGesture = cpuChoice else { return }
+        
         let result: String
-
+        
         if userGesture.lowercased() == cpuGesture.lowercased() {
             result = "Draw!"
-            // Keep current win streak
         } else if (userGesture.lowercased() == "rock" && cpuGesture.lowercased() == "scissors") ||
                     (userGesture.lowercased() == "paper" && cpuGesture.lowercased() == "rock") ||
                     (userGesture.lowercased() == "scissors" && cpuGesture.lowercased() == "paper") {
@@ -150,7 +120,9 @@ class ViewController: UIViewController {
 
         updateStreakLabels()
         showResultAlert(result: result, cpuGesture: cpuGesture) {
-            self.endGame()
+            self.cpuChoiceImageView.image = UIImage(named: "question_mark")
+            self.cpuGestureLabel.text = "CPU Gesture: Hidden"
+            self.cpuChoice = nil
         }
     }
     
@@ -171,16 +143,13 @@ class ViewController: UIViewController {
     func setupCamera() {
         captureSession.sessionPreset = .high
 
-        // Begin session configuration
         captureSession.beginConfiguration()
 
-        // Remove existing inputs
         captureSession.inputs.forEach { input in
             captureSession.removeInput(input)
         }
 
-        // Add video input
-        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition),
+        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
               let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
               captureSession.canAddInput(videoInput) else {
             DispatchQueue.main.async {
@@ -191,12 +160,10 @@ class ViewController: UIViewController {
         }
         captureSession.addInput(videoInput)
 
-        // Remove existing outputs
         if let videoOutput = captureSession.outputs.first as? AVCaptureVideoDataOutput {
             captureSession.removeOutput(videoOutput)
         }
 
-        // Add video output
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
@@ -210,46 +177,37 @@ class ViewController: UIViewController {
             return
         }
 
-        // Configure connection
         if let connection = videoOutput.connection(with: .video) {
             connection.videoOrientation = .portrait
-            connection.automaticallyAdjustsVideoMirroring = false // Add this line
-            connection.isVideoMirrored = (currentCameraPosition == .front)
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = true
         }
 
-        // Commit configuration
         captureSession.commitConfiguration()
 
-        // Update preview layer on main thread
         DispatchQueue.main.async {
-            // If previewLayer doesn't exist, create it
             if self.previewLayer == nil {
                 self.previewLayer = AVCaptureVideoPreviewLayer(session: self.captureSession)
                 self.previewLayer.videoGravity = .resizeAspectFill
                 self.previewLayer.frame = self.cameraContainerView.bounds
 
-                // Remove existing previewLayer if any
                 self.cameraContainerView.layer.sublayers?.removeAll { $0 is AVCaptureVideoPreviewLayer }
 
                 self.cameraContainerView.layer.insertSublayer(self.previewLayer, at: 0)
             }
 
-            // Update previewLayer connection settings
             if let connection = self.previewLayer.connection {
                 connection.videoOrientation = .portrait
-                connection.automaticallyAdjustsVideoMirroring = false // Add this line
-                connection.isVideoMirrored = (self.currentCameraPosition == .front)
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = true
             }
 
-            // Ensure overlay layers have correct frame
             self.overlayLayer.frame = self.cameraContainerView.bounds
             self.keyPointsLayer.frame = self.cameraContainerView.bounds
 
-            // Remove existing overlay layers
             self.overlayLayer.removeFromSuperlayer()
             self.keyPointsLayer.removeFromSuperlayer()
 
-            // Add overlay layers
             self.cameraContainerView.layer.addSublayer(self.overlayLayer)
             self.cameraContainerView.layer.addSublayer(self.keyPointsLayer)
         }
@@ -268,9 +226,7 @@ class ViewController: UIViewController {
     // MARK: - Overlay Setup
     func setupOverlay() {
         overlayLayer.frame = cameraContainerView.bounds
-        overlayLayer.strokeColor = UIColor.systemRed.cgColor
-        overlayLayer.lineWidth = 2
-        overlayLayer.fillColor = UIColor.clear.cgColor
+        cameraContainerView.layer.addSublayer(overlayLayer)
     }
     
     func setupKeyPointsOverlay() {
@@ -351,25 +307,24 @@ class ViewController: UIViewController {
 
             guard let points = try? observation.recognizedPoints(.all) else { return }
 
+            if let gesture = self.detectHandGesture(observation) {
+                self.lastDetectedGesture = gesture
+                self.gestureLabel.text = "Gesture: \(gesture)"
+                self.gestureLabel.textColor = .label
+
+                self.setUserChoiceImage(to: gesture)
+            } else {
+                self.gestureLabel.text = "Gesture: None"
+                self.gestureLabel.textColor = .secondaryLabel
+                self.userChoiceImageView.image = nil
+                self.lastDetectedGesture = nil
+            }
+
+            // Draw key points and connections
             self.drawKeyPointsWithConnections(points)
 
-            if let gesture = self.detectHandGesture(observation) {
-                // New valid gesture detected
-                if gesture != self.lastDetectedGesture {
-                    self.lastDetectedGesture = gesture
-                    self.gestureLabel.text = "Gesture: \(gesture)"
-                    self.gestureLabel.textColor = .label
-
-                    if self.isGameActive {
-                        self.handleGameLogic(userGesture: gesture)
-                    }
-                }
-            } else if let lastGesture = self.lastDetectedGesture {
-                // No new gesture detected, continue showing last gesture
-                self.gestureLabel.text = "Gesture: \(lastGesture)"
-                self.gestureLabel.textColor = .secondaryLabel
-            }
-            // If there's no last gesture, do not update the label
+            // Draw bounding box around the hand
+            self.drawHandBoundingBox(points)
         }
     }
     
@@ -389,12 +344,12 @@ class ViewController: UIViewController {
         let littleTipPoint = recognizedPoints[.littleTip]
         let thumbTipPoint = recognizedPoints[.thumbTip]
 
-        guard let wrist = wristPoint, wrist.confidence > 0.3,
-              let indexTip = indexTipPoint, indexTip.confidence > 0.3,
-              let middleTip = middleTipPoint, middleTip.confidence > 0.3,
-              let ringTip = ringTipPoint, ringTip.confidence > 0.3,
-              let littleTip = littleTipPoint, littleTip.confidence > 0.3,
-              let thumbTip = thumbTipPoint, thumbTip.confidence > 0.3 else { return nil }
+        guard let wrist = wristPoint, wrist.confidence > 0.7,
+              let indexTip = indexTipPoint, indexTip.confidence > 0.5,
+              let middleTip = middleTipPoint, middleTip.confidence > 0.7,
+              let ringTip = ringTipPoint, ringTip.confidence > 0.5,
+              let littleTip = littleTipPoint, littleTip.confidence > 0.5,
+              let thumbTip = thumbTipPoint, thumbTip.confidence > 0.5 else { return nil }
 
         let indexDistance = distanceBetween(wrist.location, indexTip.location)
         let middleDistance = distanceBetween(wrist.location, middleTip.location)
@@ -402,7 +357,7 @@ class ViewController: UIViewController {
         let littleDistance = distanceBetween(wrist.location, littleTip.location)
         let thumbDistance = distanceBetween(wrist.location, thumbTip.location)
 
-        let extendedThreshold: CGFloat = 0.2
+        let extendedThreshold: CGFloat = 0.18
 
         let fingersExtended = [
             indexDistance > extendedThreshold,
@@ -419,7 +374,6 @@ class ViewController: UIViewController {
         } else if fingersExtended[0] && fingersExtended[1] && !fingersExtended[2] && !fingersExtended[3] && !fingersExtended[4] {
             return "Scissors"
         } else {
-            // Return nil instead of "Uncertain"
             return nil
         }
     }
@@ -472,6 +426,22 @@ class ViewController: UIViewController {
             (.littleDIP, .littleTip)
         ]
         
+        var jointColor: UIColor = .systemGray
+        var connectionColor: UIColor = .white
+        
+        if let gesture = self.lastDetectedGesture {
+            switch gesture.lowercased() {
+            case "rock":
+                jointColor = .systemRed
+            case "paper":
+                jointColor = .systemGreen
+            case "scissors":
+                jointColor = .systemBlue
+            default:
+                break
+            }
+        }
+        
         for (startJoint, endJoint) in connections {
             guard let startPoint = points[startJoint], startPoint.confidence > 0.5,
                   let endPoint = points[endJoint], endPoint.confidence > 0.5 else { continue }
@@ -485,7 +455,7 @@ class ViewController: UIViewController {
             
             let lineLayer = CAShapeLayer()
             lineLayer.path = path.cgPath
-            lineLayer.strokeColor = UIColor.systemGreen.cgColor
+            lineLayer.strokeColor = connectionColor.cgColor
             lineLayer.lineWidth = 2
             keyPointsLayer.addSublayer(lineLayer)
         }
@@ -495,59 +465,50 @@ class ViewController: UIViewController {
             let circlePath = UIBezierPath(arcCenter: point, radius: 4, startAngle: 0, endAngle: CGFloat.pi * 2, clockwise: true)
             let shapeLayer = CAShapeLayer()
             shapeLayer.path = circlePath.cgPath
-            shapeLayer.fillColor = UIColor.systemYellow.cgColor
+            shapeLayer.fillColor = jointColor.cgColor
             keyPointsLayer.addSublayer(shapeLayer)
         }
     }
-    
-    // MARK: - Camera Switching
-    func switchCamera() {
-        currentCameraPosition = (currentCameraPosition == .front) ? .back : .front
-        
-        sessionQueue.async {
-            // Begin session configuration
-            self.captureSession.beginConfiguration()
 
-            // Remove existing inputs
-            for input in self.captureSession.inputs {
-                self.captureSession.removeInput(input)
-            }
+    // MARK: - Drawing Hand Bounding Box
+    func drawHandBoundingBox(_ points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]) {
+        // Filter out points with low confidence
+        let highConfidencePoints = points.values.filter { $0.confidence > 0.5 }
+        guard !highConfidencePoints.isEmpty else { return }
 
-            // Add new input
-            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: self.currentCameraPosition),
-                  let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
-                  self.captureSession.canAddInput(videoInput) else {
-                DispatchQueue.main.async {
-                    self.showCameraUnavailableAlert()
-                }
-                self.captureSession.commitConfiguration()
-                return
-            }
-            self.captureSession.addInput(videoInput)
+        // Convert Vision points to UIView coordinates
+        let convertedPoints = highConfidencePoints.map { convertFromVisionPoint($0.location) }
 
-            // Update video output connection settings
-            if let videoOutput = self.captureSession.outputs.first as? AVCaptureVideoDataOutput,
-               let connection = videoOutput.connection(with: .video) {
-                connection.videoOrientation = .portrait
-                connection.automaticallyAdjustsVideoMirroring = false // Add this line
-                connection.isVideoMirrored = (self.currentCameraPosition == .front)
-            }
+        // Compute the bounding box
+        let xValues = convertedPoints.map { $0.x }
+        let yValues = convertedPoints.map { $0.y }
 
-            // Commit session configuration
-            self.captureSession.commitConfiguration()
+        guard let minX = xValues.min(),
+              let maxX = xValues.max(),
+              let minY = yValues.min(),
+              let maxY = yValues.max() else { return }
 
-            // Update preview layer on main thread
-            DispatchQueue.main.async {
-                if let connection = self.previewLayer.connection {
-                    connection.videoOrientation = .portrait
-                    connection.automaticallyAdjustsVideoMirroring = false // Add this line
-                    connection.isVideoMirrored = (self.currentCameraPosition == .front)
-                }
-            }
-        }
+        let boundingRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+
+        // Create a CAShapeLayer for the bounding box
+        let boundingBoxLayer = CAShapeLayer()
+        boundingBoxLayer.frame = self.overlayLayer.bounds
+        boundingBoxLayer.strokeColor = UIColor.white.cgColor
+        boundingBoxLayer.lineWidth = 2.0
+        boundingBoxLayer.fillColor = UIColor.clear.cgColor
+
+        // Create the path
+        let path = UIBezierPath(rect: boundingRect)
+        boundingBoxLayer.path = path.cgPath
+
+        // Add animation for smooth transitions
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.1)
+        self.overlayLayer.addSublayer(boundingBoxLayer)
+        CATransaction.commit()
     }
 }
-
+    
 // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
 extension ViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput,
@@ -584,17 +545,16 @@ extension ViewController {
         let deviceOrientation = UIDevice.current.orientation
 
         switch deviceOrientation {
-        case .portrait:
-            return currentCameraPosition == .front ? .leftMirrored : .right
+        case .portrait, .faceUp, .faceDown, .unknown:
+            return .leftMirrored // Front camera requires mirrored orientation
         case .portraitUpsideDown:
-            return currentCameraPosition == .front ? .rightMirrored : .left
+            return .rightMirrored
         case .landscapeLeft:
-            return currentCameraPosition == .front ? .downMirrored : .up
+            return .downMirrored
         case .landscapeRight:
-            return currentCameraPosition == .front ? .upMirrored : .down
-        default:
-            // Default to portrait
-            return currentCameraPosition == .front ? .leftMirrored : .right
+            return .upMirrored
+        @unknown default:
+            return .leftMirrored
         }
     }
 }
