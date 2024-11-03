@@ -32,7 +32,6 @@ class ViewController: UIViewController {
     
     var cpuChoice: String?
     var lastDetectedGesture: String?
-
     var frameCounter = 0
     let frameProcessingInterval = 5
 
@@ -78,6 +77,7 @@ class ViewController: UIViewController {
     
     // MARK: - IBActions
     @IBAction func playButtonTapped(_ sender: UIButton) {
+        // user must make a gesture to play the game
         guard let userGesture = self.lastDetectedGesture else {
             let alert = UIAlertController(title: "No Gesture Detected",
                                           message: "Please perform a gesture before pressing Play Game.",
